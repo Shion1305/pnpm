@@ -253,6 +253,8 @@ async fn a_frozen_store_keeps_generations_beside_the_project() {
         .assert()
         .success();
     let in_store = environment(root.path());
+    let gitignore = root.path().join("store/v11/.gitignore");
+    fs::remove_file(&gitignore).unwrap();
     pacquet_in(root.path())
         .args(["install", "--offline", "--frozen-lockfile", "--frozen-store"])
         .assert()
@@ -264,6 +266,7 @@ async fn a_frozen_store_keeps_generations_beside_the_project() {
         Some(dunce::canonicalize(root.path().join(".pnpm/python-envs")).unwrap().as_path()),
     );
     assert_eq!(generations(root.path()), vec![in_store], "the frozen store was written");
+    assert!(!gitignore.exists(), "the frozen store gained a .gitignore");
     python(root.path())
         .args(["-c", "import alpha"])
         .assert()

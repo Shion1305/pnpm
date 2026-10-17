@@ -418,7 +418,7 @@ async fn prepare_workspace_slots<Reporter: self::Reporter + 'static>(
     let git_sources = packages.git_sources();
     let logged_methods = Arc::new(AtomicU8::new(0));
     let store_dir = &config.store_dir;
-    if !packages.crates.is_empty() || !packages.git.is_empty() {
+    if !config.frozen_store && (!packages.crates.is_empty() || !packages.git.is_empty()) {
         store_dir
             .init()
             .into_diagnostic()

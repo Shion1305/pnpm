@@ -141,7 +141,9 @@ async fn prepare<Reporter: self::Reporter + 'static>(
     report_platforms_without_python::<Reporter>(config);
     let Discovery { roots, workspace, .. } = discovery;
     let index = python_index(config)?;
-    config.store_dir.init().into_diagnostic()?;
+    if !config.frozen_store {
+        config.store_dir.init().into_diagnostic()?;
+    }
     let store_index = StoreIndex::shared_for(&config.store_dir, config.frozen_store);
     let (writer, writer_task) = StoreIndexWriter::spawn_for(
         &config.store_dir,

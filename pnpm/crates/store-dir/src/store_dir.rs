@@ -2,6 +2,8 @@ use dashmap::DashSet;
 use serde::{Deserialize, Serialize};
 use sha2::{Sha512, digest};
 use std::{
+    fs,
+    io::{self, Write as _},
     path::{self, PathBuf},
     sync::OnceLock,
 };
@@ -179,13 +181,15 @@ impl StoreDir {
         &self.root
     }
 
+    /// Create a missing `.gitignore` containing `*` in the versioned store root,
+    /// preserving any existing entry at that path.
+    ///
     /// On a fresh store, eagerly create `<store>/files/` plus every
     /// `files/XX/` shard (00..ff) and seed the shard cache with the
     /// bytes we just created, so CAFS writes never pay a
     /// `create_dir_all` syscall in the hot path. On a warm store
-    /// (`files/` already a directory) this is a single stat that
-    /// returns `Ok(())` without seeding the cache, leaving the lazy
-    /// mkdir fallback inside [`StoreDir::write_cas_file`] responsible
+    /// (`files/` already a directory), leave the cache unseeded. The lazy
+    /// mkdir fallback inside [`StoreDir::write_cas_file`] is responsible
     /// for materializing each shard on first write — the same
     /// lazy-shard shape pnpm uses. Seeding the cache on
     /// a warm store would be incorrect: a store created by an older
@@ -212,7 +216,7 @@ impl StoreDir {
         // directory" error from the kernel, which the caller degrades
         // to a `warn!` at install bootstrap.
         if files.is_dir() {
-            return Ok(());
+            return self.init_gitignore();
         }
         pnpm_fs::file_mode::create_dir_all_inheriting_mode(&files)?;
         for shard in 0u8..=255 {
@@ -221,7 +225,47 @@ impl StoreDir {
             create_shard_dir(&files, &files.join(format!("{shard:02x}")))?;
             self.mark_shard_ensured(shard);
         }
-        Ok(())
+        self.init_gitignore()
+    }
+
+    fn init_gitignore(&self) -> io::Result<()> {
+        let path = self.root.join(".gitignore");
+        match fs::symlink_metadata(&path) {
+            Ok(_) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+
+        let mut temporary = self.create_gitignore_temp()?;
+        temporary.write_all(b"*\n")?;
+        match temporary.persist_noclobber(&path) {
+            Ok(_) => Ok(()),
+            Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+            Err(error) => Err(error.error),
+        }
+    }
+
+    fn create_gitignore_temp(&self) -> io::Result<tempfile::NamedTempFile> {
+        #[cfg(not(target_os = "wasi"))]
+        let mut options = fs::OpenOptions::new();
+        #[cfg(not(target_os = "wasi"))]
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        let mode = pnpm_fs::file_mode::unix_creation_mode(&self.root, None);
+        #[cfg(unix)]
+        mode.apply_to(&mut options);
+
+        let temporary = tempfile::Builder::new()
+            .prefix(".gitignore-")
+            .make_in(&self.root, |path| {
+                #[cfg(target_os = "wasi")]
+                return pnpm_fs::create_file_inheriting_mode(&self.root, path, None);
+                #[cfg(not(target_os = "wasi"))]
+                options.open(path)
+            })?;
+        #[cfg(unix)]
+        mode.grant(temporary.as_file())?;
+        Ok(temporary)
     }
 }
 

@@ -5,7 +5,9 @@ use crate::cli_args::registry_client::build_registry_client;
 use derive_more::{Display, Error};
 use miette::{Diagnostic, WrapErr};
 use pnpm_config::Config;
-use pnpm_deps_restorer::{manifest_file_count, manifest_unpacked_size};
+use pnpm_deps_restorer::{
+    manifest_file_count, manifest_unpacked_size, store_init::init_store_dir_best_effort,
+};
 use pnpm_lockfile::LockfileResolution;
 use pnpm_network::ThrottledClient;
 use pnpm_reporter::{GlobalLog, LogEvent, LogLevel, Reporter, emit_global_warning};
@@ -109,6 +111,9 @@ async fn add_packages<Reporter: self::Reporter>(
     dir: &Path,
     packages: &[String],
 ) -> miette::Result<()> {
+    if !config.frozen_store {
+        init_store_dir_best_effort(&config.store_dir).await;
+    }
     let http_client = Arc::new(build_registry_client(config)?);
     let resolver = store_resolver(config, &http_client)?;
     let resolve_options = ResolveOptions {
