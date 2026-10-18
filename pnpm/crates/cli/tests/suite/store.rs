@@ -11,6 +11,8 @@ use std::{
     process::{Command, Stdio},
 };
 
+mod gitignore;
+
 fn pacquet_at(workspace: &Path) -> Command {
     Command::cargo_bin("pnpm")
         .expect("find the pnpm binary")

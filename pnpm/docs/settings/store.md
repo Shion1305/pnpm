@@ -18,6 +18,10 @@ sidebar_label: "Store & lockfile"
 
 The location where all the packages are saved on the disk.
 
+When initializing a store, pnpm adds a `.gitignore` containing `*` to the versioned
+directory shown by `pnpm store path`. This keeps local stores out of `git status`
+without changing existing ignore files or the parent directory's ignore rules.
+
 The store should be always on the same disk on which installation is happening,
 so there will be one store per disk. If there is a home directory on the current
 disk, then the store is created inside it. If there is no home on the disk,

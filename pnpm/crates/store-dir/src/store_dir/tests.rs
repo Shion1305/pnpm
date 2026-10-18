@@ -1,7 +1,11 @@
 use super::{STORE_VERSION, StoreDir};
 use pipe_trait::Pipe;
 use pretty_assertions::assert_eq;
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+use tempfile::tempdir;
 
 #[test]
 fn file_path_by_head_tail() {
@@ -84,6 +88,7 @@ fn init_creates_all_256_shards_and_populates_cache() {
     let store = StoreDir::new(tempdir.path());
     store.init().unwrap();
 
+    assert_eq!(fs::read_to_string(store.root().join(".gitignore")).unwrap(), "*\n");
     let files = tempdir.path().join("v11/files");
     assert!(files.is_dir(), "v11/files must exist after init");
     for shard in 0u8..=255 {
@@ -155,7 +160,7 @@ fn init_new_shards_inherit_group_write_and_setgid() {
 }
 
 #[test]
-fn init_warm_store_is_noop_and_leaves_cache_empty() {
+fn init_warm_store_preserves_shards_and_leaves_cache_empty() {
     use tempfile::tempdir;
 
     let tempdir = tempdir().unwrap();
@@ -173,11 +178,102 @@ fn init_warm_store_is_noop_and_leaves_cache_empty() {
     let store = StoreDir::new(tempdir.path());
     store.init().unwrap();
 
+    assert_eq!(fs::read_to_string(store.root().join(".gitignore")).unwrap(), "*\n");
     assert!(shard.join("sentinel").is_file(), "pre-existing shard content must survive init");
     for shard in 0u8..=255 {
         assert!(
             !store.shard_already_ensured(shard),
             "shard {shard:02x} must NOT be marked ensured on warm-store init — the cache is populated lazily from write_cas_file",
         );
+    }
+}
+
+#[test]
+fn init_preserves_an_existing_gitignore() {
+    let directory = tempdir().unwrap();
+    let store = StoreDir::new(directory.path());
+    store.init().unwrap();
+    let gitignore = store.root().join(".gitignore");
+    fs::write(&gitignore, "files/\n").unwrap();
+
+    store.init().unwrap();
+
+    assert_eq!(fs::read_to_string(gitignore).unwrap(), "files/\n");
+}
+
+#[test]
+fn concurrent_init_publishes_one_complete_gitignore() {
+    let directory = tempdir().unwrap();
+    let store = StoreDir::new(directory.path());
+    std::thread::scope(|scope| {
+        for _ in 0..8 {
+            scope.spawn(|| store.init().unwrap());
+        }
+    });
+
+    assert_eq!(fs::read_to_string(store.root().join(".gitignore")).unwrap(), "*\n");
+    assert_eq!(fs::read_dir(store.root()).unwrap().count(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn init_gitignore_inherits_shared_store_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempdir().unwrap();
+    let store = StoreDir::new(directory.path());
+    fs::create_dir_all(store.root()).unwrap();
+    fs::set_permissions(store.root(), fs::Permissions::from_mode(0o2770)).unwrap();
+
+    store.init().unwrap();
+
+    let gitignore = store.root().join(".gitignore");
+    assert_eq!(
+        fs::metadata(&gitignore)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o660
+    );
+    fs::set_permissions(&gitignore, fs::Permissions::from_mode(0o440)).unwrap();
+    store.init().unwrap();
+    assert_eq!(
+        fs::metadata(&gitignore)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o440
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn init_preserves_gitignore_symlinks_and_their_targets() {
+    use std::os::unix::fs::symlink;
+
+    for target_exists in [false, true] {
+        let directory = tempdir().unwrap();
+        let store = StoreDir::new(directory.path());
+        fs::create_dir_all(store.root()).unwrap();
+        let target = directory.path().join("target");
+        if target_exists {
+            fs::write(&target, "keep\n").unwrap();
+        }
+        let gitignore = store.root().join(".gitignore");
+        symlink(&target, &gitignore).unwrap();
+
+        store.init().unwrap();
+
+        assert_eq!(fs::read_link(gitignore).unwrap(), target);
+        if target_exists {
+            assert_eq!(fs::read_to_string(target).unwrap(), "keep\n");
+        } else {
+            assert_eq!(
+                fs::symlink_metadata(target).unwrap_err().kind(),
+                std::io::ErrorKind::NotFound
+            );
+        }
     }
 }

@@ -121,7 +121,10 @@ fn frozen_install_vendors_versionless_git_members_and_path_dependencies() {
     eprintln!("The original Cargo configuration must remain: {config}");
     assert!(config.starts_with(&original_config));
     cargo_check(&root);
-    install_in(&root, &["install", "--offline", "--frozen-lockfile"]);
+    let gitignore = root.path().join("store/v11/.gitignore");
+    fs::remove_file(&gitignore).unwrap();
+    install_in(&root, &["install", "--offline", "--frozen-lockfile", "--frozen-store"]);
+    assert!(!gitignore.exists(), "the frozen store gained a .gitignore");
     assert_eq!(fs::read(root.path().join("Cargo.lock")).unwrap(), lock);
     assert_eq!(fs::read_to_string(root.path().join(".cargo/config.toml")).unwrap(), config);
 }
